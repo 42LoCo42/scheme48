@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+cd app
+vim -p Main.hs Lisp.hs Error.hs Read.hs Eval.hs Apply.hs
