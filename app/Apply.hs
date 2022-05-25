@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE ExistentialQuantification #-}
 module Apply where
 
 import Text.Read (readMaybe)
@@ -75,14 +74,13 @@ primitives =
 
   , ("eq?",    eq)
   , ("eqv?",   eq)
-  , ("equal?", equal)
+  , ("equal?", eq)
   ]
 
 numeric :: Double -> ([Double] -> Double) -> Apply
 numeric empty func = Function (fmap (Number . func . fill empty) . mapM toNumber)
 
 type Converter e = LispVal -> ThrowsError e
-data Unpacker = forall a. Eq a => Unpacker (Converter a)
 
 toBool :: Converter Bool
 toBool (Atom "false")   = return False
@@ -157,23 +155,3 @@ ifMacro = Macro (\case
 
 eq :: Apply
 eq = boolBinop return (==)
-
-equal :: Apply
-equal = Function (\args ->
-  if length args == 2
-  then helper args
-  else throwError $ NumArgs 2 args
-  )
-  where
-    unpackers   =
-      [ Unpacker return
-      , Unpacker toBool
-      , Unpacker toNumber
-      , Unpacker toString
-      ]
-    helper args = return $ Bool $ any (
-      \(Unpacker u) -> either
-        (const False)
-        (\(Bool b) -> b)
-        $ runApply (boolBinop u (==)) args
-      ) unpackers
