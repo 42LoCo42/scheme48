@@ -165,7 +165,12 @@ equal = Function (\args ->
   else throwError $ NumArgs 2 args
   )
   where
-    unpackers   = [Unpacker toBool, Unpacker toNumber, Unpacker toString]
+    unpackers   =
+      [ Unpacker return
+      , Unpacker toBool
+      , Unpacker toNumber
+      , Unpacker toString
+      ]
     helper args = return $ Bool $ any (
       \(Unpacker u) -> either
         (const False)
