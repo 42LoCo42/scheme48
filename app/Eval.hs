@@ -1,5 +1,7 @@
 module Eval where
 
+import Control.Monad.Except (throwError)
+
 import Apply
 import Error
 import Lisp

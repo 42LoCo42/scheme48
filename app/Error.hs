@@ -1,11 +1,9 @@
 module Error where
 
+import Control.Monad.Except          (ExceptT)
 import Text.ParserCombinators.Parsec (ParseError)
 
 import Lisp
-
-throwError :: a -> Either a b
-throwError = Left
 
 data LispError
   = BadForm LispVal
@@ -24,4 +22,4 @@ instance Show LispError where
   show (TypeError n val) = "Could not convert to " ++ n ++ ": " ++ show val
   show (Unquote     val) = "unquote not within quasiquote: " ++ show val
 
-type ThrowsError = Either LispError
+type ThrowsError = ExceptT LispError IO

@@ -1,15 +1,14 @@
 {-# LANGUAGE LambdaCase #-}
 module Apply where
 
-import Text.Read (readMaybe)
+import Control.Monad.Except (liftIO, throwError)
+import Text.Read            (readMaybe)
 
 import                Error
 import {-# SOURCE #-} Eval  (eval)
 import                Lisp
-
-fill :: a -> [a] -> [a]
-fill a [] = [a]
-fill _ as = as
+import                Read
+import                Utils
 
 type ApplyBase = [LispVal] -> ThrowsError LispVal
 
@@ -27,22 +26,13 @@ apply name args = do
     (Just func) -> runApply func args
     Nothing     -> throwError $ NoFunction name
 
-applyFunc :: Apply
-applyFunc = Function (\case
-  [Atom name, List args] -> apply name args
-  args                   -> throwError $ NumArgs 2 args
-  )
-
-evalFunc :: Apply
-evalFunc = Function (\case
-  [val] -> eval val
-  args  -> throwError $ NumArgs 1 args
-  )
-
 primitives :: [(String, Apply)]
 primitives =
   [ ("apply", applyFunc)
+  , ("read",  readFunc)
   , ("eval",  evalFunc)
+  , ("print", printFunc)
+  , ("loop", loopFunc)
 
   , ("+",  numeric 0 sum)
   , ("-",  numeric 0 $ foldl1 (-))
@@ -66,8 +56,6 @@ primitives =
   , ("string<=?", strBoolBinop (<=))
   , ("string>=?", strBoolBinop (>=))
 
-  , ("if", ifMacro)
-
   , ("car", car)
   , ("cdr", cdr)
   , ("cons", cons)
@@ -75,7 +63,45 @@ primitives =
   , ("eq?",    eq)
   , ("eqv?",   eq)
   , ("equal?", eq)
+
+  , ("if", ifMacro)
+  , ("block", block)
+
+  , ("out", out)
+  , ("inL", inL)
   ]
+
+applyFunc :: Apply
+applyFunc = Function (\case
+  [Atom name, List args] -> apply name args
+  args                   -> throwError $ NumArgs 2 args
+  )
+
+readFunc :: Apply
+readFunc = Function (const $ liftIO getLine >>= readExpr)
+
+evalFunc :: Apply
+evalFunc = Function (\case
+  [val] -> eval val
+  args  -> throwError $ NumArgs 1 args
+  )
+
+printFunc :: Apply
+printFunc = Function (\args -> do
+  liftIO $ mapM_ print args
+  return $ List []
+  )
+
+loopFunc :: Apply
+loopFunc = Macro (\case
+  [val] -> helper val
+  args  -> throwError $ NumArgs 1 args
+  )
+  where
+    helper :: LispVal -> ThrowsError LispVal
+    helper val = do
+      _ <- eval val
+      helper val
 
 numeric :: Double -> ([Double] -> Double) -> Apply
 numeric empty func = Function (fmap (Number . func . fill empty) . mapM toNumber)
@@ -145,6 +171,9 @@ cons = Function (\case
   args        -> throwError $ NumArgs 2 args
   )
 
+eq :: Apply
+eq = boolBinop return (==)
+
 ifMacro :: Apply
 ifMacro = Macro (\case
   [ifE, thenE, elseE] -> do
@@ -153,5 +182,14 @@ ifMacro = Macro (\case
   args                -> throwError $ NumArgs 3 args
   )
 
-eq :: Apply
-eq = boolBinop return (==)
+block :: Apply
+block = Macro (fmap last . mapM eval)
+
+out :: Apply
+out = Function (\case
+  [String s] -> liftIO $ flushStr s >> return (List [])
+  args       -> throwError $ NumArgs 1 args
+  )
+
+inL :: Apply
+inL = Function (const $ String <$> liftIO getLine)

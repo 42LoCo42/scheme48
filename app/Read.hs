@@ -1,5 +1,6 @@
 module Read where
 
+import Control.Monad.Except          (throwError)
 import Text.ParserCombinators.Parsec hiding (spaces)
 
 import Error
