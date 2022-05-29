@@ -6,8 +6,8 @@ import Control.Monad        (foldM, when)
 import Control.Monad.Except (catchError, liftIO, throwError)
 import Control.Monad.State  (StateT, get, gets, lift, modify, put)
 import Data.Data            (readConstr, toConstr)
-import Data.Map.Strict      (Map, empty, fromList, insert, keys, union, (!),
-                             (!?))
+import Data.Map.Strict      (Map, empty, fromList, insert, union, (!), (!?))
+import Data.Maybe           (fromJust)
 import Text.Read            (readMaybe)
 
 import {-# SOURCE #-} Eval  (eval)
@@ -82,8 +82,6 @@ apply :: String -> [LispVal] -> Lisp
 apply name args = do
   gDefs <- lift $ gets (snd . global)
   (lVars, lDefs) <- gets local
-  liftIO $ putStrLn name
-  liftIO $ print $ keys lDefs
   case gDefs !? name of
     Nothing     -> throwError $ NoFunction name
     (Just func) -> do
@@ -155,6 +153,8 @@ primitives = fromList
   , ("try", try)
 
   , ("define", define)
+  , ("let", letFunc)
+
   , ("defun", defun)
   , ("lambda", lambda)
   ]
@@ -291,6 +291,20 @@ define = Function clean [Var "var" atomC, Any "val"] False
     evaled <- eval val
     lift $ modify (\(G (vars, defs)) -> G (insert var evaled vars, defs))
     return evaled
+  )
+
+letFunc :: Function
+letFunc = Function clean [Var "defs" listC, Rest "exprs"] False
+  (\[List defs, List exprs] -> do
+    boundDefs <- fromList <$> mapM (\def -> do
+      boundDef <- lift $ lift $
+        bindArgs [PList [Var "var" atomC, Any "val"]] [def]
+      let (Atom var) = fromJust $ boundDef !? "var"
+      val <- eval $ fromJust $ boundDef !? "val"
+      return (var, val)
+      ) defs
+    modify (\(L (vars, defs')) -> L (boundDefs `union` vars, defs'))
+    last <$> mapM eval exprs
   )
 
 mkFunction :: [LispVal] -> [LispVal] -> EEnv Function
