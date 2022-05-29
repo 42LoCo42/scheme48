@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-cd app
-vim -p \
-	Main.hs \
-	Lisp.hs Error.hs \
-	Read.hs Eval.hs Apply.hs
+cd app || exit 1
+exec vim -p \
+	Main.hs Types.hs \
+	Read.hs Eval.hs Apply.hs \
+	Utils.hs

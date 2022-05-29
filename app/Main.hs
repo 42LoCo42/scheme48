@@ -1,22 +1,20 @@
 module Main (main) where
 
-import Control.Monad.Except (runExceptT)
+import Control.Monad.Except (liftIO, runExceptT)
 
+import Apply
 import Eval
-import Lisp
+import Read  (readExpr)
+import Types
 import Utils
 
-repl :: LispVal
-repl =
-  List [Atom "loop",
-  List [Atom "print",
-  List [Atom "eval",
-  List [Atom "block",
-    List [Atom "out", String "Lisp> "],
-    List [Atom "read"]
-  ]]]]
+repl :: Lisp
+repl = readExpr "(loop (print (eval (block (out \"Lisp> \") (read)))))"
+
+test :: Lisp
+test = liftIO (readFile "test") >>= readExpr
 
 main :: IO ()
-main = runExceptT (eval repl) >>= either
-  (return . ("ERROR: " ++ ) . show)
-  (return . show) >>= (flushStr . (++ "\n"))
+main = runExceptT (runStateTA (runStateTA
+  (test >>= eval) (L clean)) (G clean)) >>=
+  flushStr . (++ "\n") <$> either (("ERROR: " ++) . show) show

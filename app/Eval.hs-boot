@@ -1,6 +1,5 @@
 module Eval where
 
-import Error
-import Lisp
+import Types
 
-eval :: LispVal -> ThrowsError LispVal
+eval :: LispVal -> Lisp

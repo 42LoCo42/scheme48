@@ -3,14 +3,16 @@ module Read where
 import Control.Monad.Except          (throwError)
 import Text.ParserCombinators.Parsec hiding (spaces)
 
-import Error
-import Lisp
+import Types
 
 symbol :: Parser Char
 symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 
+comment :: Parser Char
+comment = char ';' >> many (noneOf "\n") >> char '\n'
+
 spaces :: Parser ()
-spaces = skipMany1 space
+spaces = skipMany1 (comment <|> oneOf " \t\n")
 
 parseString :: Parser LispVal
 parseString = do
@@ -42,7 +44,7 @@ parseNumber = do
 parseList :: Parser LispVal
 parseList = do
   _ <- char '('
-  elems <- sepBy parseExpr spaces
+  elems <- optional spaces >> sepEndBy parseExpr spaces
   _ <- char ')'
   return $ List elems
 
@@ -59,13 +61,15 @@ parseQuoted = do
   return $ List [atom, x]
 
 parseExpr :: Parser LispVal
-parseExpr = parseString
-        <|> try parseNumber
-        <|> parseAtom
-        <|> parseQuoted
-        <|> parseList
+parseExpr = do
+  optional spaces
+  parseString
+    <|> try parseNumber
+    <|> parseAtom
+    <|> parseQuoted
+    <|> parseList
 
-readExpr :: String -> ThrowsError LispVal
+readExpr :: String -> Lisp
 readExpr input = case parse parseExpr "lisp" input of
   Left  err -> throwError $ ParseErr err
   Right val -> return val

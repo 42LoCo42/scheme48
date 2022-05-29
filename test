@@ -1,0 +1,20 @@
+; vim: ft=lisp
+(block
+  ; comment here
+  (defun foo ((Atom a Atom b) Atom c)
+    (out "foo called!
+")
+    (print a b c)
+    (define glob a)
+  )
+
+  ;; this sets glob (two times)
+  (foo '(abc def) 'ghi)
+  (foo '(foo bar) 'baz)
+
+  (try (foo 'abc 'def 'ghi) outL)
+
+  (print (map (lambda (Number n) (+ 1 n)) '(1 2 3 4)))
+
+  (print glob)
+)

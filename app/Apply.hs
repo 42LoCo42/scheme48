@@ -1,33 +1,110 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Apply where
 
-import Control.Monad.Except (liftIO, throwError)
+import Control.Monad        (foldM, when)
+import Control.Monad.Except (catchError, liftIO, throwError)
+import Control.Monad.State  (StateT, get, gets, lift, modify, put)
+import Data.Data            (readConstr, toConstr)
+import Data.Map.Strict      (Map, empty, fromList, insert, keys, union, (!),
+                             (!?))
 import Text.Read            (readMaybe)
 
-import                Error
 import {-# SOURCE #-} Eval  (eval)
-import                Lisp
 import                Read
+import                Types
 import                Utils
 
-type ApplyBase = [LispVal] -> ThrowsError LispVal
+clean :: Env
+clean = (empty, primitives)
 
-data Apply
-  = Function ApplyBase
-  | Macro    ApplyBase
+bindArgs :: [Param] -> [LispVal] -> E Vars
+bindArgs expected got =
+  runStateTS (runStateTS (mapM_ bindArg expected) got) empty
+  where
+    err :: StateT [LispVal] (StateT Vars E) a
+    err = lift $ throwError $ NumArgs expected got
 
-runApply :: Apply -> ApplyBase
-runApply (Function f) args = mapM eval args >>= f
-runApply (Macro    m) args = m args
+    bindArg :: Param -> StateT [LispVal] (StateT Vars E) ()
+    bindArg (All   name)     = lift $ bind name (List got)
+    bindArg (Rest  name)     = get >>= (lift . bind name . List)
+    bindArg (Any   name)     = consume >>= (lift . bind name)
+    bindArg (PList args)     = consume >>= (\case
+      List list -> lift (lift $ bindArgs args list) >>= (lift . bindAll)
+      _         -> err
+      )
+    bindArg (Var   name typ) = consume >>= (\val ->
+      if toConstr val == typ
+      then lift $ bind name val
+      else err
+      )
 
-apply :: String -> ApplyBase
+    consume :: StateT [LispVal] (StateT Vars E) LispVal
+    consume = do
+      args <- get
+      when (null args) err
+      let ret = head args
+      put $ tail args
+      return ret
+
+    bind :: String -> LispVal -> StateT Vars E ()
+    bind var val = modify (insert var val)
+
+    bindAll :: Vars -> StateT Vars E ()
+    bindAll new = modify (union new)
+
+argStructure :: Vars -> [Param] -> [LispVal]
+argStructure vars = map helper
+  where
+    helper (PList list) = List $ argStructure vars list
+    helper  arg         = vars ! argName arg
+
+paramStructure :: [LispVal] -> E [Param]
+paramStructure [] = return []
+paramStructure (Atom typ : Atom name : rest) = do
+  this <- case name of
+    ":all"  -> return $ All name
+    ":rest" -> return $ Rest name
+    ":any"  -> return $ Any name
+    _       -> maybe
+      (throwError $ NoType typ)
+      (return . Var name)
+      (readConstr lispValT typ)
+  (this :) <$> paramStructure rest
+
+paramStructure (List list : rest) = do
+  this <- PList <$> paramStructure list
+  (this :) <$> paramStructure rest
+
+paramStructure vals = throwError $ BadForm $ List vals
+
+apply :: String -> [LispVal] -> Lisp
 apply name args = do
-  case lookup name primitives of
-    (Just func) -> runApply func args
+  gDefs <- lift $ gets (snd . global)
+  (lVars, lDefs) <- gets local
+  liftIO $ putStrLn name
+  liftIO $ print $ keys lDefs
+  case gDefs !? name of
     Nothing     -> throwError $ NoFunction name
+    (Just func) -> do
+      let params = parameters func
+      let (cloVars, cloDefs) = closure func
 
-primitives :: [(String, Apply)]
-primitives =
+      boundVars <-
+        mapM (if evalAll func then eval else return) args >>=
+        (lift . lift . bindArgs params)
+
+      let
+        runEnv =
+          ( boundVars `union` cloVars `union` lVars
+          , cloDefs `union` lDefs
+          )
+
+      lift $ runStateTA
+        (body func $ argStructure boundVars params) (L runEnv)
+
+primitives :: Map String Function
+primitives = fromList
   [ ("apply", applyFunc)
   , ("read",  readFunc)
   , ("eval",  evalFunc)
@@ -56,9 +133,13 @@ primitives =
   , ("string<=?", strBoolBinop (<=))
   , ("string>=?", strBoolBinop (>=))
 
+  , ("id", Function clean [Any "val"] True (return . head))
+
   , ("car", car)
   , ("cdr", cdr)
   , ("cons", cons)
+  , ("map", mapFunc)
+  , ("fold", foldFunc)
 
   , ("eq?",    eq)
   , ("eqv?",   eq)
@@ -68,45 +149,45 @@ primitives =
   , ("block", block)
 
   , ("out", out)
+  , ("outL", outL)
   , ("inL", inL)
+
+  , ("try", try)
+
+  , ("define", define)
+  , ("defun", defun)
+  , ("lambda", lambda)
   ]
 
-applyFunc :: Apply
-applyFunc = Function (\case
-  [Atom name, List args] -> apply name args
-  args                   -> throwError $ NumArgs 2 args
-  )
+applyFunc :: Function
+applyFunc = Function clean [Var "function" atomC, Var "args" listC] True
+  (\[Atom name, List args] -> apply name args)
 
-readFunc :: Apply
-readFunc = Function (const $ liftIO getLine >>= readExpr)
+readFunc :: Function
+readFunc = Function clean [] True (const $ liftIO getLine >>= readExpr)
 
-evalFunc :: Apply
-evalFunc = Function (\case
-  [val] -> eval val
-  args  -> throwError $ NumArgs 1 args
-  )
+evalFunc :: Function
+evalFunc = Function clean [Any "expr"] True (\[val] -> eval val)
 
-printFunc :: Apply
-printFunc = Function (\args -> do
+printFunc :: Function
+printFunc = Function clean [All "args"] True (\[List args] -> do
   liftIO $ mapM_ print args
   return $ List []
   )
 
-loopFunc :: Apply
-loopFunc = Macro (\case
-  [val] -> helper val
-  args  -> throwError $ NumArgs 1 args
-  )
+loopFunc :: Function
+loopFunc = Function clean [Any "expr"] False (\[val] -> helper val)
   where
-    helper :: LispVal -> ThrowsError LispVal
+    helper :: LispVal -> Lisp
     helper val = do
       _ <- eval val
       helper val
 
-numeric :: Double -> ([Double] -> Double) -> Apply
-numeric empty func = Function (fmap (Number . func . fill empty) . mapM toNumber)
+numeric :: Double -> ([Double] -> Double) -> Function
+numeric start func = Function clean [All "args"] True
+  (\[List args] -> Number . func . fill start <$> mapM toNumber args)
 
-type Converter e = LispVal -> ThrowsError e
+type Converter e = LispVal -> EEnv e
 
 toBool :: Converter Bool
 toBool (Atom "false")   = return False
@@ -134,62 +215,105 @@ toString (Number s) = return $ show s
 toString (String s) = return s
 toString e          = throwError $ TypeError "string" e
 
-boolBinop :: Converter a -> (a -> a -> Bool) -> Apply
-boolBinop conv func = Function (\case
-  [a1, a2] -> do
+boolBinop :: Converter a -> (a -> a -> Bool) -> Function
+boolBinop conv func = Function clean [Any "b1", Any "b2"] True
+  (\[a1, a2] -> do
     b1 <- conv a1
     b2 <- conv a2
     return $ Bool $ func b1 b2
-  args     -> throwError $ NumArgs 2 args
   )
 
-boolBoolBinop :: (Bool -> Bool -> Bool) -> Apply
+boolBoolBinop :: (Bool -> Bool -> Bool) -> Function
 boolBoolBinop = boolBinop toBool
 
-numBoolBinop :: (Double -> Double -> Bool) -> Apply
+numBoolBinop :: (Double -> Double -> Bool) -> Function
 numBoolBinop = boolBinop toNumber
 
-strBoolBinop :: (String -> String -> Bool) -> Apply
+strBoolBinop :: (String -> String -> Bool) -> Function
 strBoolBinop = boolBinop toString
 
-car :: Apply
-car = Function (\case
-  [List (h:_)] -> return h
-  args         -> throwError $ NumArgs 1 args
+car :: Function
+car = Function clean [Var "list" listC] True (\[List (h:_)] -> return h)
+
+cdr :: Function
+cdr = Function clean [Var "list" listC] True (\[List (_:t)] -> return $ List t)
+
+cons :: Function
+cons = Function clean [Any "val", Var "list" listC] True
+  (\[h, List t] -> return $ List $ h:t)
+
+mapFunc :: Function
+mapFunc = Function clean [Var "func" atomC, Var "list" listC] True
+  (\[Atom func, List l] -> List <$> mapM (apply func . (:[])) l)
+
+foldFunc :: Function
+foldFunc = Function clean [Var "func" atomC, Var "list" listC] True
+  (\[Atom func, List l] -> case l of
+    []   -> return $ List []
+    vals -> foldM (\accum val ->
+      apply func [accum, val]) (head vals) (tail vals)
   )
 
-cdr :: Apply
-cdr = Function (\case
-  [List (_:t)] -> return $ List t
-  args         -> throwError $ NumArgs 1 args
-  )
-
-cons :: Apply
-cons = Function (\case
-  e@[_]       -> return $ List e
-  [h, List t] -> return $ List $ h:t
-  args        -> throwError $ NumArgs 2 args
-  )
-
-eq :: Apply
+eq :: Function
 eq = boolBinop return (==)
 
-ifMacro :: Apply
-ifMacro = Macro (\case
-  [ifE, thenE, elseE] -> do
+ifMacro :: Function
+ifMacro = Function clean [Any "if", Any "then", Any "else"] False
+  (\[ifE, thenE, elseE] -> do
     result <- eval ifE >>= toBool
     eval $ if result then thenE else elseE
-  args                -> throwError $ NumArgs 3 args
   )
 
-block :: Apply
-block = Macro (fmap last . mapM eval)
+block :: Function
+block = Function clean [All "exprs"] False
+  (\[List args] -> last <$> mapM eval args)
 
-out :: Apply
-out = Function (\case
-  [String s] -> liftIO $ flushStr s >> return (List [])
-  args       -> throwError $ NumArgs 1 args
+out :: Function
+out = Function clean [Var "string" stringC] True
+  (\[String s] -> liftIO $ flushStr s >> return (List []))
+
+outL :: Function
+outL = Function clean [Var "string" stringC] False
+  (\[String s] -> liftIO $ flushStr (s ++ "\n") >> return (List []))
+
+inL :: Function
+inL = Function clean [] True (const $ String <$> liftIO getLine)
+
+try :: Function
+try = Function clean [Any "expr", Var "handler" atomC] False
+  (\[expr, Atom handler] ->
+    eval expr `catchError` (apply handler . (: []) . String . show)
   )
 
-inL :: Apply
-inL = Function (const $ String <$> liftIO getLine)
+define :: Function
+define = Function clean [Var "var" atomC, Any "val"] False
+  (\[Atom var, val] -> do
+    evaled <- eval val
+    lift $ modify (\(G (vars, defs)) -> G (insert var evaled vars, defs))
+    return evaled
+  )
+
+mkFunction :: [LispVal] -> [LispVal] -> EEnv Function
+mkFunction params exprs = do
+  env <- gets local
+  structure <- lift $ lift $ paramStructure params
+  return $ Function env structure True (const $ last <$> mapM eval exprs)
+
+defun :: Function
+defun = Function clean
+  [Var "name" atomC, Var "params" listC, Rest "exprs"] False
+  (\[Atom name, List params, List exprs] -> do
+    func <- mkFunction params exprs
+    lift $ modify (\(G (vars, defs)) -> G (vars, insert name func defs))
+    return $ List []
+  )
+
+lambda :: Function
+lambda = Function clean
+  [Var "params" listC, Rest "exprs"] False
+  (\[List params, List exprs] -> do
+    let name = "'lambda"
+    func <- mkFunction params exprs
+    modify (\(L (vars, defs)) -> L (vars, insert name func defs))
+    return $ Atom name
+  )
