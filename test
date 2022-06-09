@@ -1,22 +1,21 @@
 ;; vim: ft=lisp
 (block
-    ;; comment here
-    (defun foo ((Atom a Atom b) Atom c)
-      (outL "foo called!")
-      (print a b c)
-      (define glob a)
+  ;; comment here
+  (defun foo ((Atom a Atom b) Atom c)
+    (outL "foo called!")
+    (print a b c)
+    (define glob a))
 
-      ;; this sets glob (two times)
-      (foo '(abc def) 'ghi)
-      (foo '(foo bar) 'baz)
+  ;; this sets glob (two times)
+  (foo '(abc def) 'ghi)
+  (foo '(foo bar) 'baz)
 
-      (try (foo 'abc 'def 'ghi) outL)
+  (try (foo 'abc 'def 'ghi) outL)
 
-      (print
-       (let
-           ((foo 123)
-            (bar 456)
-            (a 'b ignored))
-         `(,foo ,bar ,a))))
-
+  (print
+   (let
+     ((foo 123)
+      (bar 456)
+      (a 'b ignored))
+     `(,foo ,bar ,a)))
   (print glob))
