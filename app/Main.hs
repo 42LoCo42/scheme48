@@ -9,12 +9,12 @@ import Types
 import Utils
 
 repl :: Lisp
-repl = readExpr "(loop (print (eval (block (out \"Lisp> \") (read)))))"
+repl = readExpr "(loop (try (print (eval (block (out \"Lisp> \") (read)))) outL))"
 
 test :: Lisp
 test = liftIO (readFile "test") >>= readExpr
 
 main :: IO ()
 main = runExceptT (runStateTA (runStateTA
-  (test >>= eval) (L clean)) (G clean)) >>=
+  (repl >>= eval) (L clean)) (G clean)) >>=
   flushStr . (++ "\n") <$> either (("ERROR: " ++) . show) show
