@@ -62,7 +62,7 @@ argStructure vars = map helper
 paramStructure :: [LispVal] -> E [Param]
 paramStructure [] = return []
 paramStructure (Atom typ : Atom name : rest) = do
-  this <- case name of
+  this <- case typ of
     ":all"  -> return $ All name
     ":rest" -> return $ Rest name
     ":any"  -> return $ Any name
